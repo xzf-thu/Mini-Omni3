@@ -1,4 +1,4 @@
-# mini-omni3
+# mini-omni3 123
 
 Audio-enhanced GPT for streaming speech-to-text dialogue.
 
