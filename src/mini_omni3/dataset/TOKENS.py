@@ -1,7 +1,7 @@
 """
 Single source of truth for special token IDs used by the audio-enhanced GPT.
 
-Both `build_online.py` and `build_offline.py` import from here so
+Both `cons_online_data.py` and `cons_offline_data.py` import from here so
 that any change to a token id propagates everywhere.
 """
 

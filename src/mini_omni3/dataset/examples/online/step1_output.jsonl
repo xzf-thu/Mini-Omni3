@@ -1,0 +1,1 @@
+{"idx": 0, "turns": [{"audio_path": "/path/to/your/audio.wav", "assistant": "ok", "emotion": "normal", "leading_silence_frames": 10, "leading_noise_path": "/noise_dir/cafe_01.wav", "leading_noise_start_s": 1.234}], "tail_silence_frames": 10, "tail_noise_path": "/noise_dir/street_03.wav", "tail_noise_start_s": 0.5}

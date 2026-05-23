@@ -6,13 +6,14 @@ Three task variants come from which blocks are present:
   - audio         -> A_T
   -         user  -> T_T
 
-Input:  {"conversation": [{"user", "assistant", "audio_path"}, ...]} (first turn only)
-        or flat {"user", "assistant", "audio_path"}.
-Output: {"tasks": "offline", "idx", "input_ids", "labels", "audio_pos", "pt_path_dir"}.
-Run again to resume — already-written idx are skipped.
+Input  (per line): {"conversation": [{"user", "assistant", "audio_path"}, ...]} (first turn only)
+                   or flat {"user", "assistant", "audio_path"}.
+Output (per line): {"tasks": "offline", "idx", "input_ids", "labels", "audio_pos", "pt_path_dir"}.
+
+Edit the constants below, then `python cons_offline_data.py`.
+Re-running picks up where the previous run stopped (already-written idx are skipped).
 """
 
-import argparse
 import json
 import os
 
@@ -20,20 +21,26 @@ import torch
 from tqdm import tqdm
 from transformers import AutoConfig, Qwen2_5OmniForConditionalGeneration
 
-from mini_omni3.dataset.audio_io import _load_mel
-from mini_omni3.dataset.tokens import (
+from mini_omni3.dataset.utils.load_audio import _load_mel
+from mini_omni3.dataset.TOKENS import (
     ASSISTANT, AUDIO_BEGIN, AUDIO_END, AUDIO_PAD, ENGLISH, MASK,
     OFFLINE, SYSTEM, TEXT_BEGIN, TEXT_END, USER,
 )
+from mini_omni3.generate.base import resolve_checkpoint_paths
 from mini_omni3.tokenizer import Tokenizer
 
 
 # ============================================================
-# Fill in these paths before running.
+# Fill these in before running.
 # ============================================================
-QWEN_OMNI_CKPT   = ""  # path to the Qwen2.5-Omni model directory
-AUDIO_TOWER_CKPT = ""  # path to the finetuned audio_tower .pth file
+CHECKPOINT_DIR = ""   # checkpoint root (tokenizer + qwen_2_5_omni_config + MiniOmni3_ChunkwisedEncoder.pth)
+INPUT_JSONL    = ""   # raw input jsonl
+OUTPUT_JSONL   = ""   # training-ready output jsonl
+ERROR_LOG      = ""   # path to append per-sample error messages
+FEATURE_DIR    = ""   # dir to save audio feature .pt files (one subdir per sample)
+DEVICE         = "cuda"
 # ============================================================
+
 
 DEFAULT_SYSTEM_PROMPT = (
     "You are a helpful assistant. When there is no user text, if the audio contains a question, "
@@ -48,26 +55,23 @@ MAX_AUDIO_SECONDS = 20
 _audio_encoder_cache = {}
 
 
-def _get_audio_encoder(device):
-    key = str(device)
+def _get_audio_encoder(qwen_omni_ckpt, audio_tower_ckpt, device):
+    key = (qwen_omni_ckpt, audio_tower_ckpt, str(device))
     if key not in _audio_encoder_cache:
-        if not QWEN_OMNI_CKPT or not AUDIO_TOWER_CKPT:
-            raise RuntimeError(
-                "Set QWEN_OMNI_CKPT and AUDIO_TOWER_CKPT at the top of build_offline.py."
-            )
-        print(f"[offline] loading audio_encoder on {key} ...")
-        cfg = AutoConfig.from_pretrained(QWEN_OMNI_CKPT)
+        print(f"[offline] loading audio_encoder on {device} ...")
+        cfg = AutoConfig.from_pretrained(qwen_omni_ckpt)
         enc = Qwen2_5OmniForConditionalGeneration._from_config(cfg).thinker.audio_tower
-        enc.load_state_dict(torch.load(AUDIO_TOWER_CKPT, map_location=device))
+        enc.load_state_dict(torch.load(audio_tower_ckpt, map_location=device))
         enc.to(device).eval()
         _audio_encoder_cache[key] = enc
     return _audio_encoder_cache[key]
 
 
-def _extract_and_save_audio_feature(audio_path, device, save_dir):
-    """Encode audio, save to `<save_dir>/1.pt`, return output_len."""
+def _extract_and_save_audio_feature(audio_path, save_dir, *,
+                                    qwen_omni_ckpt, audio_tower_ckpt, device):
+    """Encode audio, save to `<save_dir>/AudioFeat.pt`, return output_len."""
     _, mel, len_feature, input_len, _ = _load_mel(audio_path, max_seconds=MAX_AUDIO_SECONDS)
-    encoder = _get_audio_encoder(device)
+    encoder = _get_audio_encoder(qwen_omni_ckpt, audio_tower_ckpt, device)
     with torch.no_grad():
         hidden = encoder(
             mel.to(device),
@@ -98,7 +102,9 @@ def _extract_first_turn(data_item):
 
 # === Sample builder ===
 
-def build_offline_sample(data_item, idx, *, tokenizer, system_ids, feature_dir, device):
+def build_offline_sample(data_item, idx, *,
+                         tokenizer, system_ids, feature_dir,
+                         qwen_omni_ckpt, audio_tower_ckpt, device):
     """Build one offline SFT sample. Returns a dict with input_ids/labels/audio_pos/pt_path_dir."""
     user_text, assistant_text, audio_path = _extract_first_turn(data_item)
     if not assistant_text or assistant_text == "None":
@@ -111,7 +117,10 @@ def build_offline_sample(data_item, idx, *, tokenizer, system_ids, feature_dir, 
 
     if has_audio:
         pt_path_dir = os.path.join(feature_dir, str(idx))
-        output_len = _extract_and_save_audio_feature(audio_path, device, pt_path_dir)
+        output_len = _extract_and_save_audio_feature(
+            audio_path, pt_path_dir,
+            qwen_omni_ckpt=qwen_omni_ckpt, audio_tower_ckpt=audio_tower_ckpt, device=device,
+        )
     else:
         pt_path_dir = None
         output_len = 0
@@ -137,19 +146,6 @@ def build_offline_sample(data_item, idx, *, tokenizer, system_ids, feature_dir, 
 
 # === Main driver ===
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Build offline SFT samples (A_T_T / A_T / T_T).")
-    parser.add_argument("data_file", type=str, help="input jsonl file")
-    parser.add_argument("output_path", type=str, help="output jsonl file")
-    parser.add_argument("error_path", type=str, help="error log file")
-    parser.add_argument("feature_dir", type=str, help="dir to save audio feature .pt files")
-    parser.add_argument("--checkpoint_dir", type=str, default=QWEN_OMNI_CKPT,
-                        help="tokenizer checkpoint dir (defaults to QWEN_OMNI_CKPT at the top of this file)")
-    parser.add_argument("--device", type=str, default="cuda",
-                        help="device for audio encoder")
-    return parser.parse_args()
-
-
 def _load_processed_indices(output_path):
     """For resume: collect idx of all valid records already in output_path."""
     done = set()
@@ -165,28 +161,37 @@ def _load_processed_indices(output_path):
 
 
 def main():
-    args = parse_args()
-    os.makedirs(args.feature_dir, exist_ok=True)
+    for name, value in [("CHECKPOINT_DIR", CHECKPOINT_DIR), ("INPUT_JSONL", INPUT_JSONL),
+                        ("OUTPUT_JSONL", OUTPUT_JSONL), ("ERROR_LOG", ERROR_LOG),
+                        ("FEATURE_DIR", FEATURE_DIR)]:
+        if not value:
+            raise SystemExit(f"Set {name} at the top of cons_offline_data.py before running.")
 
-    with open(args.data_file, "r", encoding="utf-8") as f:
+    tokenizer_dir, _, qwen_omni_ckpt, audio_tower_ckpt = resolve_checkpoint_paths(CHECKPOINT_DIR)
+    os.makedirs(FEATURE_DIR, exist_ok=True)
+
+    with open(INPUT_JSONL, "r", encoding="utf-8") as f:
         data_lines = f.readlines()
 
-    processed = _load_processed_indices(args.output_path)
+    processed = _load_processed_indices(OUTPUT_JSONL)
     todo = [i for i in range(len(data_lines)) if i not in processed]
     print(f"Total {len(data_lines)} | already done {len(processed)} | to process {len(todo)}")
 
-    tokenizer = Tokenizer(args.checkpoint_dir)
+    tokenizer = Tokenizer(tokenizer_dir)
     system_ids = tokenizer.encode(DEFAULT_SYSTEM_PROMPT).cpu().tolist()
 
-    with open(args.output_path, "a", encoding="utf-8", buffering=1) as fout, \
-         open(args.error_path, "a", encoding="utf-8", buffering=1) as ferr:
+    with open(OUTPUT_JSONL, "a", encoding="utf-8", buffering=1) as fout, \
+         open(ERROR_LOG,   "a", encoding="utf-8", buffering=1) as ferr:
         for idx in tqdm(todo):
             try:
                 data_item = json.loads(data_lines[idx])
                 sample = build_offline_sample(
                     data_item, idx,
                     tokenizer=tokenizer, system_ids=system_ids,
-                    feature_dir=args.feature_dir, device=args.device,
+                    feature_dir=FEATURE_DIR,
+                    qwen_omni_ckpt=qwen_omni_ckpt,
+                    audio_tower_ckpt=audio_tower_ckpt,
+                    device=DEVICE,
                 )
                 fout.write(json.dumps(
                     {"tasks": "offline", "idx": idx, **sample},

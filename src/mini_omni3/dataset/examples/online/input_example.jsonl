@@ -1,0 +1,3 @@
+{"conversation": [{"audio_path": "/path/to/your/audio.wav", "assistant": "ok", "emotion": "normal"}]}
+{"merge_path": "/path/to/your/single_turn.wav", "assistant": "Single-turn shorthand also works.", "emotion": "surprise"}
+{"conversation": [{"audio_path": "/path/to/turn1.wav", "assistant": "first reply", "emotion": "happy"}, {"audio_path": "/path/to/turn2.wav", "assistant": "<no need to response>", "emotion": "normal"}]}

@@ -16,13 +16,19 @@ pip install -e '.[all]'
 
 ## 1. Prepare training data
 
-Edit the path constants at the top of each script first:
+Both builders read their config from constants at the top of the file
+(no command-line args). `CHECKPOINT_DIR` is the same checkpoint folder from §3,
+so `qwen_2_5_omni_config/` and `MiniOmni3_ChunkwisedEncoder.pth` get picked up
+automatically.
 
 | File | Constants to fill in |
 |---|---|
-| `src/mini_omni3/dataset/extract_audio_features.py` | `QWEN_OMNI_CKPT`, `AUDIO_TOWER_CKPT` |
-| `src/mini_omni3/dataset/build_online.py` | `QWEN_OMNI_CKPT` |
-| `src/mini_omni3/dataset/build_offline.py` | `QWEN_OMNI_CKPT`, `AUDIO_TOWER_CKPT` |
+| `src/mini_omni3/dataset/cons_offline_data.py` | `CHECKPOINT_DIR`, `INPUT_JSONL`, `OUTPUT_JSONL`, `ERROR_LOG`, `FEATURE_DIR` |
+| `src/mini_omni3/dataset/cons_online_data.py`  | `CHECKPOINT_DIR`, `INPUT_JSONL`, `WORK_DIR`, `OUT_TRAIN_JSONL`, `NOISE_DIR` |
+
+One-line JSON samples for every stage live under
+`src/mini_omni3/dataset/examples/{offline,online}/`. The shapes are documented
+inline below.
 
 ### Input JSONL format
 
@@ -68,16 +74,75 @@ or the online-style multi-turn shape (only the **first** turn is used):
 ### Run
 
 ```bash
-# Online:
-PYTHONPATH=src CUDA_VISIBLE_DEVICES=0 python src/mini_omni3/dataset/build_online.py \
-    <input.jsonl> <output.jsonl> <error.log> <feature_dir>
-
-# Offline:
-PYTHONPATH=src CUDA_VISIBLE_DEVICES=0 python src/mini_omni3/dataset/build_offline.py \
-    <input.jsonl> <output.jsonl> <error.log> <feature_dir>
+PYTHONPATH=src CUDA_VISIBLE_DEVICES=0 python src/mini_omni3/dataset/cons_offline_data.py
+PYTHONPATH=src CUDA_VISIBLE_DEVICES=0 python src/mini_omni3/dataset/cons_online_data.py
 ```
 
-Both scripts are resumable — re-running picks up where the previous run stopped (skips already-written `idx`). See `src/mini_omni3/dataset/build_dataset.sh` for a parallel multi-GPU template.
+Lengths in `*_frames` fields are encoder-output frames
+(1 frame = 40 ms @ 16 kHz audio_tower → 640 audio samples).
+
+#### Offline output (`OUTPUT_JSONL`, one line per input sample)
+
+| Field | What it is |
+|---|---|
+| `tasks` | always `"offline"` |
+| `idx` | line index in `INPUT_JSONL` |
+| `input_ids` | `prefix + [AUDIO_BEGIN, AUDIO_PAD×N, AUDIO_END]? + [USER, TEXT_BEGIN, ...user, TEXT_END]? + [ASSISTANT, TEXT_BEGIN, ...reply, TEXT_END]` |
+| `labels`    | same length as `input_ids`; `-100` masks prefix / audio / user blocks; the assistant block is left unmasked |
+| `audio_pos` | `[[start, end]]` — index range of the `AUDIO_PAD` slots in `input_ids`. `null` for T_T (text-only) samples |
+| `pt_path_dir` | dir containing this sample's `AudioFeat.pt`. `null` for T_T |
+
+#### Online pipeline
+
+The online builder runs four `stepN_*` functions in order, each appending new
+fields onto the previous step's jsonl so every intermediate artifact is
+inspectable on disk. Re-run the script for everything, or import a single
+`stepN_*` function to redo just that stage.
+
+**Step 1 — `step1_sample_silence`** → `<WORK_DIR>/step1.jsonl`
+Draws a random leading-noise length for each turn plus a tail-noise length,
+and picks a noise file from `NOISE_DIR` (with a random start offset) for each
+slot. No audio is loaded.
+
+| Field | What it is |
+|---|---|
+| `idx` | input line index |
+| `turns[].audio_path`, `assistant`, `emotion` | carried over from input |
+| `turns[].leading_silence_frames` | sampled length of the leading noise gap for this turn |
+| `turns[].leading_noise_path`     | noise file chosen for this turn's leading gap |
+| `turns[].leading_noise_start_s`  | start offset (seconds) inside the noise file |
+| `tail_silence_frames`            | sampled length of the trailing noise |
+| `tail_noise_path` / `tail_noise_start_s` | noise file + start for the tail |
+
+**Step 2 — `step2_concat_audio`** → `<WORK_DIR>/step2.jsonl` + `<WORK_DIR>/wavs/<idx>.wav`
+Loads each turn's audio, splices `noise → turn audio → noise → turn audio → ... → tail noise`
+into one waveform and writes it as a wav. Adds:
+
+| Field | What it is |
+|---|---|
+| `turns[].audio_frames`         | actual encoder-frame count of the turn's audio after pad/crop |
+| `tail_silence_frames_actual`   | tail length after rounding the total to a chunk boundary |
+| `concat_wav_path`              | path of the per-sample concatenated wav |
+
+**Step 3 — `step3_extract_features`** → `<WORK_DIR>/step3.jsonl` + `<WORK_DIR>/features/<idx>/AudioFeat.pt`
+Runs the Qwen2.5-Omni audio_tower on each wav and saves the feature tensor.
+
+| Field | What it is |
+|---|---|
+| `pt_path_dir` | dir holding `AudioFeat.pt` for this sample |
+
+**Step 4 — `step4_build_tokens`** → `OUT_TRAIN_JSONL`
+Lays out the streaming token sequence. Output is the training-ready shape
+consumed by `SFTAudioDataset`.
+
+| Field | What it is |
+|---|---|
+| `tasks` | always `"online"` |
+| `idx`   | same as step 1 |
+| `input_ids` | `prefix + N × [AUDIO_BEGIN, PAD×chunk_size, ASSISTANT, KEEP_SILENCE]`; the chunk that ends each turn is replaced by `[..., ASSISTANT, TEXT_BEGIN, emotion, ...reply ids, TEXT_END]` |
+| `labels`    | same length; only the per-chunk emission (`KEEP_SILENCE`, or the reply tokens on the response chunk) is unmasked |
+| `audio_pos` | one `[start, end]` per chunk — index range of that chunk's `PAD×chunk_size` slot |
+| `pt_path_dir` | same as step 3 |
 
 &nbsp;
 
@@ -104,14 +169,14 @@ PYTHONPATH=src python src/mini_omni3/finetune/train.py --config src/mini_omni3/f
 
 ## 3. Inference
 
-Both `assets/infer_*.py` and `web/server.py` read everything from a single
-`checkpoint/` folder at the repo root. Create it with the following layout:
+`infer_online.py`, `infer_offline.py`, and `web/server.py` all read from a
+single `checkpoint/` folder. Create it and then point the `CHECKPOINT_DIR`
+constant at the top of each entry file at it.
 
 ```
 Mini-Omni3/
-├── assets/
-│   ├── infer_online.py                  streaming entry (prompts for an audio path each round)
-│   └── infer_offline.py                 one-shot entry (edit AUDIO_PATH at the top)
+├── infer_online.py                      streaming entry (prompts for an audio path each round)
+├── infer_offline.py                     one-shot entry (edit AUDIO_PATH at the top)
 ├── checkpoint/                          (you create this)
 │   ├── model_config.yaml                ┐
 │   ├── tokenizer.json                   │  our HF release (drop the files at the root)
@@ -133,14 +198,15 @@ Sources:
 | `checkpoint/MiniOmni3_ChunkwisedEncoder.pth` | Our HuggingFace release (produced by `src/mini_omni3/finetune/wrap_audio_tower.py`) |
 | `checkpoint/qwen_2_5_omni_config/`           | [Qwen/Qwen2.5-Omni-3B](https://huggingface.co/Qwen/Qwen2.5-Omni-3B) |
 
-Once `checkpoint/` is filled in, run either mode:
+Once `checkpoint/` is filled in and `CHECKPOINT_DIR` is set in the entry file,
+run either mode:
 
 ```bash
 # Online streaming — interactive, one audio file per round on stdin.
-PYTHONPATH=src CUDA_VISIBLE_DEVICES=0 python assets/infer_online.py
+PYTHONPATH=src CUDA_VISIBLE_DEVICES=0 python infer_online.py
 
 # Offline single-shot — edit AUDIO_PATH at the top of the file first.
-PYTHONPATH=src CUDA_VISIBLE_DEVICES=0 python assets/infer_offline.py
+PYTHONPATH=src CUDA_VISIBLE_DEVICES=0 python infer_offline.py
 ```
 
 Online mode prompts for an audio file path each round and streams replies.

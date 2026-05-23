@@ -1,0 +1,4 @@
+{"user": "Hello, can you suggest a gift?", "assistant": "Of course, what's the occasion?", "audio_path": "/path/to/your/gift_question.wav"}
+{"assistant": "I can hear that you're asking about gifts.", "audio_path": "/path/to/your/gift_audio.wav"}
+{"user": "What is two plus two?", "assistant": "Two plus two equals four."}
+{"conversation": [{"user": "tell me about Beijing", "assistant": "Beijing is the capital city of China.", "audio_path": "/path/to/your/beijing.wav"}]}

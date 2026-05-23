@@ -23,7 +23,7 @@ import torch
 import whisper
 from transformers import AutoConfig, Qwen2_5OmniForConditionalGeneration
 
-from mini_omni3.dataset.tokens import (
+from mini_omni3.dataset.TOKENS import (
     ASSISTANT, AUDIO_BEGIN, ENGLISH, KEEP_SILENCE, ONLINE, PAD,
     SYSTEM, TEXT_BEGIN, TEXT_END,
 )
