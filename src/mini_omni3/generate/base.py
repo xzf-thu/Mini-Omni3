@@ -142,21 +142,28 @@ def streaming_generate(
     prefix_ids: torch.Tensor,
     *,
     rounds: int = 10,
+    audio_paths: Optional[List[str]] = None,
     max_returned_tokens: int = 4096,
     temperature: float = 1.0,
     top_k: Optional[int] = None,
     top_p: float = 1.0,
 ):
-    """Interactive loop: prompt for an audio path, stream audio→text, decode and print."""
+    """Stream audio→text. If `audio_paths` is given, run one round per path
+    non-interactively (offline); otherwise prompt stdin each round (online)."""
     device = prefix_ids.device
     token = prefix_ids
     input_pos = torch.arange(0, prefix_ids.size(0), device=device, dtype=torch.int64)
     input_pos_maxp1 = _init_input_pos_maxp1(model, prefix_ids.size(0), device)
 
     turns: List[List[int]] = []  # one inner list per assistant turn, starting at TEXT_BEGIN
+    n_rounds = len(audio_paths) if audio_paths is not None else rounds
 
-    for round_idx in range(rounds):
-        audio_path = input(f"Round {round_idx} — enter audio path: ").strip()
+    for round_idx in range(n_rounds):
+        if audio_paths is not None:
+            audio_path = audio_paths[round_idx]
+            print(f"Round {round_idx} — audio: {audio_path}")
+        else:
+            audio_path = input(f"Round {round_idx} — enter audio path: ").strip()
         audio_chunks = encode_audio_chunks(audio_path, audio_encoder, device)
         print(f"[{len(audio_chunks)} audio chunks]")
 
@@ -200,10 +207,15 @@ def streaming_generate(
 
         # Decode and print this round's assistant turns.
         # Each turn looks like [TEXT_BEGIN, EMOTION, ...text..., TEXT_END]; strip both ends.
+        # In offline mode (audio_paths supplied) also print silent decisions so the
+        # demo viewer sees the model's "no reply" outcomes explicitly.
         for piece_idx, turn in enumerate(turns, start=1):
-            decoded = tokenizer.decode(torch.tensor(turn[2:-1]))
-            if decoded:
-                print(f"\n=== Audio piece {piece_idx} ===\n{decoded}\n")
+            if turn[0] == TEXT_BEGIN:
+                decoded = tokenizer.decode(torch.tensor(turn[2:-1]))
+                if decoded:
+                    print(f"\n=== Audio piece {piece_idx} ===\n{decoded}\n")
+            elif audio_paths is not None:
+                print(f"\n=== Audio piece {piece_idx} === (silent — kept listening)\n")
 
     return turns
 
@@ -246,11 +258,16 @@ def run_inference(
     qwen_omni_ckpt: str,
     audio_tower_ckpt: str,
     rounds: int = 10,
+    audio_paths: Optional[List[str]] = None,
     seed: int = 1337,
     max_new_tokens: int = 4096,
     device: str = "cuda:0",
 ):
-    """End-to-end: build fabric, load model + audio encoder, run streaming_generate."""
+    """End-to-end: build fabric, load model + audio encoder, run streaming_generate.
+
+    If `audio_paths` is given, runs one round per path non-interactively
+    (offline mode). Otherwise prompts stdin each round (online mode).
+    """
     for name, value in [
         ("model_config_dir", model_config_dir),
         ("trained_checkpoint", trained_checkpoint),
@@ -282,7 +299,8 @@ def run_inference(
         with torch.inference_mode():
             return streaming_generate(
                 model, audio_encoder, tokenizer, prefix_ids,
-                rounds=rounds, max_returned_tokens=max_new_tokens,
+                rounds=rounds, audio_paths=audio_paths,
+                max_returned_tokens=max_new_tokens,
             )
     finally:
         model.clear_kv_cache()

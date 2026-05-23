@@ -104,12 +104,14 @@ PYTHONPATH=src python src/mini_omni3/finetune/train.py --config src/mini_omni3/f
 
 ## 3. Inference
 
-Both `infer.py` and `web/server.py` read everything from a single `checkpoint/`
-folder at the repo root. Create it with the following layout:
+Both `assets/infer_*.py` and `web/server.py` read everything from a single
+`checkpoint/` folder at the repo root. Create it with the following layout:
 
 ```
 Mini-Omni3/
-├── infer.py
+├── assets/
+│   ├── infer_online.py         streaming entry (prompts for an audio path each round)
+│   └── infer_offline.py        one-shot entry (edit AUDIO_PATH at the top)
 ├── checkpoint/                 (you create this)
 │   ├── model_config/           model_config.yaml + tokenizer files (our HF release)
 │   ├── qwen2.5-omni_config/    Qwen2.5-Omni-3B from the official HF repo
@@ -127,13 +129,19 @@ Sources:
 | `checkpoint/audio_tower.pth`| Our HuggingFace release (produced by `src/mini_omni3/finetune/wrap_audio_tower.py`) |
 | `checkpoint/qwen2.5-omni_config/` | [Qwen/Qwen2.5-Omni-3B](https://huggingface.co/Qwen/Qwen2.5-Omni-3B) |
 
-Once `checkpoint/` is filled in:
+Once `checkpoint/` is filled in, run either mode:
 
 ```bash
-PYTHONPATH=src CUDA_VISIBLE_DEVICES=0 python infer.py
+# Online streaming — interactive, one audio file per round on stdin.
+PYTHONPATH=src CUDA_VISIBLE_DEVICES=0 python assets/infer_online.py
+
+# Offline single-shot — edit AUDIO_PATH at the top of the file first.
+PYTHONPATH=src CUDA_VISIBLE_DEVICES=0 python assets/infer_offline.py
 ```
 
-The script prompts for an audio file path per round and prints the reply.
+Online mode prompts for an audio file path each round and streams replies.
+Offline mode runs the given audio once and prints the reply, or
+`(silent — kept listening)` if the model chose not to respond.
 
 &nbsp;
 
