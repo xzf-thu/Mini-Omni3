@@ -5,14 +5,7 @@
 
 <h1 align="center">Mini-Omni3: An Always-On Streaming Audio Language Model for the Real World</h1>
 
-<p align="center">
-  <a href="https://www.youtube.com/watch?v=r1S4xiUBg9s">
-    <img src="https://img.youtube.com/vi/r1S4xiUBg9s/maxresdefault.jpg" alt="Watch Mini-Omni3 running live" width="95%">
-  </a>
-</p>
-<p align="center"><em>▶ Click to watch Mini-Omni3 listen, decide, and speak — live (YouTube)</em></p>
-
-We introduce **MINI-OMNI3**, the first **always-on Streaming Audio Language Model (SALM)** that makes sense of sound **as it arrives**, not after it ends. But the headline isn't any single skill — it's that **one model does all of them at once, inside one open session**. Online understanding, real-time transcription and translation, full-spectrum audio-grounded conversation, and proactive audio-triggered intervention are not separate modes you switch between; they are facets of a single always-on intelligence that, frame by frame, decides **whether to stay quiet and which capability to bring to bear**. Trained on **260,000 hours of streaming audio** with our unified **SoundFlow** framework, Mini-Omni3 continuously ingests audio frames and uses dedicated `⟨Silent⟩` / `⟨Speak⟩` control tokens to choose when — and how — to respond. Despite training under chunked streaming objectives, it stays **competitive with strong offline baselines** — and sometimes beats them. If you like us, please give us a star ✨.
+We introduce **MINI-OMNI3**, the first **always-on Streaming Audio Language Model (SALM)** that follows **every audio task — understanding, transcription, translation, full-spectrum conversation, and proactive intervention — in a single streaming session**, deciding frame by frame via `⟨Silent⟩` / `⟨Speak⟩` control tokens when and how to respond. Trained on **260,000 hours of streaming audio** with our unified **SoundFlow** framework, it stays **competitive with strong offline baselines** — and sometimes beats them. If you like us, please give us a star ✨.
 
 <p align="center"><u><em>The world never stops making sound — neither should your model.</em></u></p>
 
@@ -30,8 +23,12 @@ We introduce **MINI-OMNI3**, the first **always-on Streaming Audio Language Mode
 
 
 <p align="center">
-  <img src="/docs/assets/overview.png" alt="Mini-Omni3 Overview" width="100%">
+  <a href="https://www.youtube.com/watch?v=r1S4xiUBg9s">
+    <img src="https://img.youtube.com/vi/r1S4xiUBg9s/maxresdefault.jpg" alt="Watch Mini-Omni3 running live" width="95%">
+  </a>
 </p>
+<p align="center"><em>▶ Click to watch Mini-Omni3 listen, decide, and speak — live (YouTube)</em></p>
+
 
 
 ## 🔥 News
